@@ -238,7 +238,7 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
 
     # Multiselect filter controls
     selected_segments = st.sidebar.multiselect(
-        "Customer Segment (label)",
+        "Segment label (applies to transactions)",
         options=all_segments,
         key="filter_segment",
     )
@@ -317,7 +317,7 @@ def render_kpi_row(df_filtered: pd.DataFrame):
     decline_rev = df_filtered[df_filtered["label"] == "Decline"]["PurchaseAmount"].sum()
     pct_decline_rev = (decline_rev / total_rev * 100) if total_rev > 0 else 0.0
 
-    at_risk_custs = df_filtered[df_filtered["AtRisk"]]["CustomerID"].nunique()
+    at_risk_txns = int(df_filtered["AtRisk"].sum())
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
@@ -325,13 +325,13 @@ def render_kpi_row(df_filtered: pd.DataFrame):
     with c2:
         st.metric("Avg Purchase Amount", f"${avg_purchase:,.2f}")
     with c3:
-        st.metric("Unique Customers", f"{unique_custs:,}")
+        st.metric("Unique Customer IDs", f"{unique_custs:,}")
     with c4:
         st.metric("Avg Satisfaction", f"{avg_sat:.2f} / 5.0")
     with c5:
-        st.metric("Revenue from Decline", f"{pct_decline_rev:.1f}%")
+        st.metric("Revenue from Decline Txns", f"{pct_decline_rev:.1f}%")
     with c6:
-        st.metric("At-Risk Customers", f"{at_risk_custs:,}")
+        st.metric("At-Risk Transactions", f"{at_risk_txns:,}")
 
 
 # -----------------------------------------------------------------------------
@@ -517,8 +517,8 @@ def render_tab_overview(df_filtered: pd.DataFrame):
     st.caption("Note: Dataset spans approximately 5 weeks (2023-01-15 to 2023-02-20); data reflects short-term operational cadence rather than secular seasonality.")
 
     # 6. Top 10 Customers Table
-    st.markdown("#### 🏆 Top 10 Customers by Revenue")
-    st.caption("High-value accounts ranked by total spend within the filtered date and segment criteria.")
+    st.markdown("#### 🏆 Top 10 Customer IDs by Revenue")
+    st.caption("Customer IDs ranked by total spend in the filtered view. Segment labels apply to transactions, so one ID can carry several labels (see 'Segments seen').")
 
     top_cust = (
         df_filtered.groupby("CustomerID")
@@ -528,6 +528,7 @@ def render_tab_overview(df_filtered: pd.DataFrame):
             TotalRevenue=("PurchaseAmount", "sum"),
             Transactions=("PurchaseAmount", "count"),
             AvgSatisfaction=("CustomerSatisfaction", "mean"),
+            SegmentsSeen=("label", lambda s: ", ".join(sorted(s.unique()))),
         )
         .reset_index()
         .sort_values("TotalRevenue", ascending=False)
@@ -540,11 +541,12 @@ def render_tab_overview(df_filtered: pd.DataFrame):
     top_cust_display["AvgSatisfaction"] = top_cust_display["AvgSatisfaction"].apply(lambda s: f"{s:.2f} / 5.0")
     top_cust_display.columns = [
         "Customer ID",
-        "Primary Segment",
-        "Primary Region",
+        "Most Frequent Segment",
+        "Most Frequent Region",
         "Total Revenue",
         "Transactions (n)",
         "Avg Satisfaction",
+        "Segments seen",
     ]
     st.dataframe(top_cust_display, use_container_width=True, hide_index=True)
 
@@ -788,15 +790,15 @@ def render_tab_risk(df_filtered: pd.DataFrame):
 
         st.warning(
             escape_dollars(
-                f"🚨 **Risk Summary Alert:** **{risk_cust_count}** unique customer(s) are currently flagged as At-Risk "
-                f"(accounting for **${total_risk_rev:,.2f}** in exposed revenue across **{len(at_risk_df)}** transactions). "
+                f"🚨 **Risk Summary Alert:** **{len(at_risk_df)}** transaction(s) across **{risk_cust_count}** customer ID(s) are currently flagged as At-Risk "
+                f"(accounting for **${total_risk_rev:,.2f}** in exposed revenue). "
                 f"**{low_sat_count}** orders have severe dissatisfaction ratings (1-2 / 5.0). "
                 f"The highest density of at-risk transactions is concentrated in the **{top_risk_region}** region "
                 f"via the **{top_risk_chan}** channel."
             )
         )
     else:
-        st.success("✅ No at-risk customers or low-satisfaction signals in the active filter selection.")
+        st.success("✅ No at-risk transactions or low-satisfaction signals in the active filter selection.")
 
     col1, col2 = st.columns(2)
 
@@ -849,7 +851,7 @@ def render_tab_risk(df_filtered: pd.DataFrame):
                 barmode="group",
                 color_discrete_map=CHANNEL_COLORS,
                 text="transactions",
-                title="Decline Customer Transactions by Region & Channel",
+                title="Decline-Labeled Transactions by Region & Channel",
                 labels={"transactions": "Decline Transactions (n)", "CustomerRegion": "Region"},
                 template="plotly_white",
             )
@@ -928,13 +930,13 @@ def render_tab_risk(df_filtered: pd.DataFrame):
             fig_cohort.update_traces(textposition="outside")
             fig_cohort.update_layout(showlegend=False, yaxis=dict(rangemode="tozero"))
             st.plotly_chart(fig_cohort, use_container_width=True)
-            st.caption("Evaluation of ticket size difference between declining customers and engaged segments.")
+            st.caption("Average ticket of Decline-labeled transactions vs. all other labeled transactions.")
         else:
             st.info("No segment records available for cohort ticket comparison.")
 
     # 5. At-Risk Customers Detail Table
-    st.markdown("#### 🔍 Filtered At-Risk Customer Directory")
-    st.caption("Customers flagged due to 'Decline' status or low satisfaction (<= 2). Prioritized by lowest satisfaction.")
+    st.markdown("#### 🔍 Filtered At-Risk Transaction Directory")
+    st.caption("Transactions flagged because they are labeled 'Decline' or have satisfaction <= 2, sorted by lowest satisfaction. A customer ID can appear in more than one segment.")
 
     if not at_risk_df.empty:
         at_risk_display = (
@@ -968,7 +970,7 @@ def render_tab_risk(df_filtered: pd.DataFrame):
         ]
         st.dataframe(at_risk_display, use_container_width=True, hide_index=True)
     else:
-        st.info("No at-risk customer records match the current filter selection.")
+        st.info("No at-risk transactions match the current filter selection.")
 
     # 6. Watchlist (Early Warning) Section (Item 9)
     st.markdown("---")
@@ -984,16 +986,16 @@ def render_tab_risk(df_filtered: pd.DataFrame):
 
     st.markdown(
         escape_dollars(
-            f"**Watchlist Volume:** **{w_cnt}** transaction(s) across **{w_custs}** unique customer(s) totaling **${w_rev:,.2f}** in revenue."
+            f"**Watchlist Volume:** **{w_cnt}** transaction(s) across **{w_custs}** customer ID(s) totaling **${w_rev:,.2f}** in revenue."
         )
     )
 
     if not watchlist_df.empty:
         st.info(
             escape_dollars(
-                f"ℹ️ **Early Warning Signal:** In this filtered sample, **{w_cnt}** transaction(s) across **{w_custs}** customer(s) "
+                f"ℹ️ **Early Warning Signal:** In this filtered sample, **{w_cnt}** transaction(s) across **{w_custs}** customer ID(s) "
                 f"outside the Decline segment report satisfaction ratings ≤ 3, accounting for **${w_rev:,.2f}** in active spend. "
-                "Proactively addressing friction points in these accounts prevents downward migration into the Decline segment."
+                "Proactively addressing friction points in these transactions can help prevent downward migration into the Decline segment."
             )
         )
         watchlist_display = (
@@ -1066,7 +1068,7 @@ def render_tab_recommendations(df_filtered: pd.DataFrame):
         top_5_at_risk = at_risk_df.sort_values("PurchaseAmount", ascending=False).head(5)
         for _, r in top_5_at_risk.iterrows():
             top_at_risk_list.append(
-                f"Customer {r['CustomerID']} ({r['label']}, {r['CategoryGroup']}, {r['RetailChannel']}): "
+                f"Customer ID {r['CustomerID']} ({r['label']}, {r['CategoryGroup']}, {r['RetailChannel']}): "
                 f"${r['PurchaseAmount']:,.2f} (Satisfaction: {r['CustomerSatisfaction']}/5)"
             )
     top_at_risk_str = (
@@ -1089,6 +1091,19 @@ def render_tab_recommendations(df_filtered: pd.DataFrame):
     store_no_dec = store_df[store_df["label"] != "Decline"]
     store_no_dec_sat = store_no_dec["CustomerSatisfaction"].mean() if not store_no_dec.empty else 0.0
 
+    gap_all = abs(online_all_sat - store_all_sat)
+    gap_no_dec = abs(online_no_dec_sat - store_no_dec_sat)
+    if gap_all > 0 and gap_no_dec < gap_all * 0.5:
+        gap_note = (
+            f"*Note: The channel gap is {gap_all:.2f} points overall and {gap_no_dec:.2f} excluding Decline-labeled "
+            f"transactions. It shrinks by more than half, so the gap largely reflects segment mix.*"
+        )
+    else:
+        gap_note = (
+            f"*Note: The channel gap is {gap_all:.2f} points overall and {gap_no_dec:.2f} excluding Decline-labeled "
+            f"transactions. The gap may partly reflect segment mix, but it does not disappear when Decline is removed.*"
+        )
+
     st.markdown("#### 🎯 Strategic Action Cards")
 
     col1, col2 = st.columns(2)
@@ -1100,8 +1115,8 @@ def render_tab_recommendations(df_filtered: pd.DataFrame):
                 escape_dollars(
                     f"**Focus Area:** Category expansion in **{top_pg_cat}** for Promising & Growth tiers.<br>"
                     f"**Supporting Evidence:** In this filtered sample of {n_records} transactions, Promising and Growth "
-                    f"customers generated **${pg_rev:,.2f}** ({pg_rev / total_rev * 100:.1f}% of filtered revenue) across "
-                    f"**{pg_custs}** unique customer accounts.<br>"
+                    f"transactions generated **${pg_rev:,.2f}** ({pg_rev / total_rev * 100:.1f}% of filtered revenue) across "
+                    f"**{pg_custs}** unique customer IDs.<br>"
                     f"**Recommended Action:** Allocate VIP loyalty incentives, early-access marketing promos, and category bundling "
                     f"around {top_pg_cat} to accelerate customer migration into top spenders."
                 ),
@@ -1112,8 +1127,8 @@ def render_tab_recommendations(df_filtered: pd.DataFrame):
             st.markdown("#### 2. Retain At-Risk Customers")
             st.markdown(
                 escape_dollars(
-                    f"**Focus Area:** Proactive intervention for accounts with declining spend or satisfaction ≤ 2.<br>"
-                    f"**Supporting Evidence:** In this filtered sample, **{at_risk_custs}** accounts are flagged At-Risk, "
+                    f"**Focus Area:** Proactive intervention for transactions labeled Decline or with satisfaction ≤ 2.<br>"
+                    f"**Supporting Evidence:** In this filtered sample, **{len(at_risk_df)}** transactions across **{at_risk_custs}** customer IDs are flagged At-Risk, "
                     f"accounting for **${at_risk_rev:,.2f}** ({at_risk_rev / total_rev * 100:.1f}% of filtered revenue).<br>"
                     f"**Top 5 At-Risk Transactions by Value:**{top_at_risk_str}<br><br>"
                     f"**Recommended Action:** Deploy customer-care intervention protocol (Suggested pilot, to be tested: "
@@ -1131,8 +1146,7 @@ def render_tab_recommendations(df_filtered: pd.DataFrame):
                     f"**Supporting Evidence:** In this sample, Online satisfaction averages **{online_all_sat:.2f} / 5.0** overall "
                     f"(**{online_no_dec_sat:.2f} / 5.0** excluding Decline), compared to **{store_all_sat:.2f} / 5.0** overall "
                     f"(**{store_no_dec_sat:.2f} / 5.0** excluding Decline) in Physical Stores.<br>"
-                    f"*Note: The satisfaction gap between channels may partially reflect customer segment mix across channels "
-                    f"(e.g., concentration of Decline customers in physical stores vs. online).*<br>"
+                    f"{gap_note}<br>"
                     f"**Recommended Action:** Conduct operational audit of checkout friction, in-store staff service, and "
                     f"online order fulfillment to address root causes of friction."
                 ),
@@ -1144,14 +1158,15 @@ def render_tab_recommendations(df_filtered: pd.DataFrame):
             st.markdown(
                 escape_dollars(
                     f"**Focus Area:** Frequency acceleration for Stable customer segment.<br>"
-                    f"**Supporting Evidence:** In this sample, Stable customers represent **${stable_rev:,.2f}** across "
-                    f"**{stable_custs}** customers with an average order value of **${stable_avg:,.2f}**.<br>"
+                    f"**Supporting Evidence:** In this sample, Stable-labeled transactions total **${stable_rev:,.2f}** across "
+                    f"**{stable_custs}** customer IDs, with an average order value of **${stable_avg:,.2f}**.<br>"
                     f"**Recommended Action:** Launch replenishment reminders and omnichannel crossover promotions "
                     f"(Suggested pilot, to be tested: e.g., 'Buy online, pick up in store' incentives and personalized reminders)."
                 ),
                 unsafe_allow_html=True,
             )
 
+    st.caption("Segment labels apply to transactions. A customer ID can appear in more than one segment, so customer ID counts across cards do not add up to the total.")
     st.markdown("#### 🧭 Decision-Maker Priority Matrix")
     # Compute priority from simple rule (Item 11d)
     # High: Active risk/decline friction OR revenue >= $3,000
@@ -1164,13 +1179,13 @@ def render_tab_recommendations(df_filtered: pd.DataFrame):
         {
             "Segment": "Decline & Low Satisfaction",
             "Recommended Action": "High-priority outreach & CS resolution protocol to prevent permanent customer attrition",
-            "Supporting Metric": f"In this sample: {at_risk_custs} at-risk customers, ${at_risk_rev:,.2f} revenue exposed",
+            "Supporting Metric": f"In this sample: {len(at_risk_df)} at-risk transactions ({at_risk_custs} customer IDs), ${at_risk_rev:,.2f} revenue exposed",
             "Priority": "High" if (at_risk_rev > 0 or at_risk_custs > 0) else "Low",
         },
         {
             "Segment": "Promising & Growth",
             "Recommended Action": f"Increase marketing spend on high-performing {top_pg_cat} & personalized upsell bundles",
-            "Supporting Metric": f"In this sample: ${pg_rev:,.2f} revenue across {pg_custs} accounts",
+            "Supporting Metric": f"In this sample: ${pg_rev:,.2f} revenue across {pg_custs} customer IDs",
             "Priority": "High" if pg_rev >= 3000 else ("Medium" if pg_rev >= 1000 else "Low"),
         },
         {
@@ -1182,7 +1197,7 @@ def render_tab_recommendations(df_filtered: pd.DataFrame):
         {
             "Segment": "Unlabeled",
             "Recommended Action": "Enrich transactional and demographic tracking to ensure 100% behavioral classification",
-            "Supporting Metric": f"In this sample: {unlabeled_df['CustomerID'].nunique()} unclassified customer(s) (${unlabeled_rev:,.2f} revenue)",
+            "Supporting Metric": f"In this sample: {len(unlabeled_df)} unlabeled transaction(s) (${unlabeled_rev:,.2f} revenue)",
             "Priority": "High" if unlabeled_rev >= 3000 else ("Medium" if unlabeled_rev >= 1000 else "Low"),
         },
     ]
@@ -1196,7 +1211,18 @@ def render_tab_recommendations(df_filtered: pd.DataFrame):
 MODEL_NAME = "openai/gpt-oss-120b"
 
 
-def build_context(df_filtered: pd.DataFrame) -> str:
+def compute_id_facts(d: pd.DataFrame):
+    """Returns (distinct IDs, rows, IDs with >1 row, IDs with >1 distinct real label)."""
+    n_ids = d["CustomerID"].nunique()
+    n_rows = len(d)
+    per_id = d.groupby("CustomerID").size()
+    repeat_ids = int((per_id > 1).sum())
+    labeled = d[d["label"] != "Unlabeled"]
+    multi_label_ids = int((labeled.groupby("CustomerID")["label"].nunique() > 1).sum())
+    return n_ids, n_rows, repeat_ids, multi_label_ids
+
+
+def build_context(df_filtered: pd.DataFrame, df_all: pd.DataFrame = None) -> str:
     """
     Build a comprehensive, precomputed text summary of the CURRENTLY FILTERED dataset
     to inject into the Groq model context. Precomputes all shares, averages labeled
@@ -1228,10 +1254,10 @@ def build_context(df_filtered: pd.DataFrame) -> str:
             "revenue_share_pct": rev_share,
             "transactions": s_cnt,
             "transaction_share_pct": trans_share,
-            "unique_customers": s_cust,
-            "customer_share_pct": cust_share,
+            "unique_customer_ids": s_cust,
+            "customer_id_share_pct": cust_share,
             "avg_spend_per_transaction": s_avg_trans,
-            "avg_spend_per_customer": s_avg_cust,
+            "avg_spend_per_customer_id": s_avg_cust,
             "avg_satisfaction_per_transaction": s_sat,
         })
     seg_df = pd.DataFrame(seg_records)
@@ -1240,7 +1266,7 @@ def build_context(df_filtered: pd.DataFrame) -> str:
     seg_ranked = seg_df[seg_df["segment"] != "Unlabeled"] if (seg_df["segment"] != "Unlabeled").any() else seg_df
     rev_ranking = seg_ranked.sort_values("revenue", ascending=False).reset_index(drop=True)
     rev_rank_str = "\n".join([
-        f"  - Rank {i+1}: {r['segment']} -> Revenue: ${r['revenue']:,.2f} ({r['revenue_share_pct']:.1f}% of total revenue, across {r['unique_customers']} customers, {r['transactions']} transactions)"
+        f"  - Rank {i+1}: {r['segment']} -> Revenue: ${r['revenue']:,.2f} ({r['revenue_share_pct']:.1f}% of total revenue, across {r['unique_customer_ids']} customer IDs, {r['transactions']} transactions)"
         for i, r in rev_ranking.iterrows()
     ])
 
@@ -1250,9 +1276,9 @@ def build_context(df_filtered: pd.DataFrame) -> str:
         for i, r in ticket_ranking.iterrows()
     ])
 
-    cust_spend_ranking = seg_ranked.sort_values("avg_spend_per_customer", ascending=False).reset_index(drop=True)
+    cust_spend_ranking = seg_ranked.sort_values("avg_spend_per_customer_id", ascending=False).reset_index(drop=True)
     cust_spend_rank_str = "\n".join([
-        f"  - Rank {i+1}: {r['segment']} -> Average Spend per Customer: ${r['avg_spend_per_customer']:.2f} (Total Revenue: ${r['revenue']:,.2f} / {r['unique_customers']} unique customers)"
+        f"  - Rank {i+1}: {r['segment']} -> Average Spend per Customer ID: ${r['avg_spend_per_customer_id']:.2f} (Total Revenue: ${r['revenue']:,.2f} / {r['unique_customer_ids']} customer IDs)"
         for i, r in cust_spend_ranking.iterrows()
     ])
 
@@ -1270,7 +1296,7 @@ def build_context(df_filtered: pd.DataFrame) -> str:
         r_cust = g["CustomerID"].nunique()
         r_sat = g["CustomerSatisfaction"].mean()
         reg_records.append(
-            f"  - Region {reg}: Revenue ${r_rev:,.2f} ({(r_rev/total_rev*100):.1f}%), {r_cnt} transactions ({(r_cnt/total_trans*100):.1f}%), {r_cust} customers, avg spend per transaction ${r_rev/r_cnt:.2f}, avg satisfaction {r_sat:.2f}/5.0"
+            f"  - Region {reg}: Revenue ${r_rev:,.2f} ({(r_rev/total_rev*100):.1f}%), {r_cnt} transactions ({(r_cnt/total_trans*100):.1f}%), {r_cust} customer IDs, avg spend per transaction ${r_rev/r_cnt:.2f}, avg satisfaction {r_sat:.2f}/5.0"
         )
 
     # 3. Category Group metrics
@@ -1280,7 +1306,7 @@ def build_context(df_filtered: pd.DataFrame) -> str:
         c_cnt = len(g)
         c_cust = g["CustomerID"].nunique()
         cat_records.append(
-            f"  - {cat}: Revenue ${c_rev:,.2f} ({(c_rev/total_rev*100):.1f}%), {c_cnt} transactions, {c_cust} customers, avg spend per transaction ${c_rev/c_cnt:.2f}"
+            f"  - {cat}: Revenue ${c_rev:,.2f} ({(c_rev/total_rev*100):.1f}%), {c_cnt} transactions, {c_cust} customer IDs, avg spend per transaction ${c_rev/c_cnt:.2f}"
         )
 
     # 4. Channel metrics
@@ -1291,20 +1317,33 @@ def build_context(df_filtered: pd.DataFrame) -> str:
         ch_cust = g["CustomerID"].nunique()
         ch_sat = g["CustomerSatisfaction"].mean()
         chan_records.append(
-            f"  - {chan}: Revenue ${ch_rev:,.2f} ({(ch_rev/total_rev*100):.1f}%), {ch_cnt} transactions ({(ch_cnt/total_trans*100):.1f}%), {ch_cust} customers, avg spend per transaction ${ch_rev/ch_cnt:.2f}, avg spend per customer ${ch_rev/ch_cust:.2f}, avg satisfaction {ch_sat:.2f}/5.0"
+            f"  - {chan}: Revenue ${ch_rev:,.2f} ({(ch_rev/total_rev*100):.1f}%), {ch_cnt} transactions ({(ch_cnt/total_trans*100):.1f}%), {ch_cust} customer IDs, avg spend per transaction ${ch_rev/ch_cnt:.2f}, avg spend per customer ID ${ch_rev/ch_cust:.2f}, avg satisfaction {ch_sat:.2f}/5.0"
         )
 
-    # 5. At-Risk & Watchlist summary
+    # 5. Customer ID facts (labels apply to transactions, IDs repeat)
+    base = df_all if df_all is not None else df_filtered
+    a_ids, a_rows, a_repeat, a_multi = compute_id_facts(base)
+    f_ids, f_rows, f_repeat, f_multi = compute_id_facts(df_filtered)
+
+    # 6. At-Risk & Watchlist summary
     at_risk = df_filtered[df_filtered["AtRisk"]]
     at_risk_rev = at_risk["PurchaseAmount"].sum()
     at_risk_custs = at_risk["CustomerID"].nunique()
 
-    context_str = f"""### OVERALL FILTERED DATASET TOTALS:
+    context_str = f"""### DATA INTEGRITY NOTES (READ FIRST):
+- Segment labels (Promising, Growth, Stable, Decline) apply to individual TRANSACTIONS, not to fixed customers.
+- Full dataset: {a_ids} distinct CustomerIDs across {a_rows} transactions. {a_repeat} CustomerIDs appear in more than one transaction, and {a_multi} of them carry different segment labels on different transactions.
+- Current filtered view: {f_ids} customer IDs across {f_rows} transactions ({f_repeat} repeat IDs, {f_multi} with more than one label).
+- The project brief mentions about 99 customers, but the file contains only {a_ids} distinct CustomerIDs.
+- Segments are NOT mutually exclusive groups of customers: customer ID counts per segment overlap and do not add up to the total.
+- Always call counts of people 'customer IDs', never 'customers'.
+
+### OVERALL FILTERED DATASET TOTALS:
 - Total Revenue: ${total_rev:,.2f}
 - Total Transactions: {total_trans}
-- Total Unique Customers: {unique_custs}
+- Total Unique Customer IDs: {unique_custs}
 - Overall Average Spend per Transaction: ${overall_avg_per_trans:.2f}
-- Overall Average Spend per Customer: ${overall_avg_per_cust:.2f}
+- Overall Average Spend per Customer ID: ${overall_avg_per_cust:.2f}
 - Overall Average Customer Satisfaction: {avg_sat:.2f} / 5.0
 - Date Range Covered: {df_filtered['TransactionDate'].dt.date.min()} to {df_filtered['TransactionDate'].dt.date.max()} (approximately 5-week window)
 
@@ -1315,7 +1354,7 @@ def build_context(df_filtered: pd.DataFrame) -> str:
 - Segments Ranked by Average Spend per Transaction (Ticket Size):
 {ticket_rank_str}
 
-- Segments Ranked by Average Spend per Customer:
+- Segments Ranked by Average Spend per Customer ID:
 {cust_spend_rank_str}
 
 - Segments Ranked by Average Customer Satisfaction (Highest to Lowest):
@@ -1334,12 +1373,12 @@ def build_context(df_filtered: pd.DataFrame) -> str:
 {chr(10).join(chan_records)}
 
 ### RISK & DECLINE SUMMARY:
-- At-Risk Accounts (Decline segment OR Satisfaction <= 2): {at_risk_custs} unique customers, {len(at_risk)} transactions, totaling ${at_risk_rev:,.2f} ({at_risk_rev/total_rev*100:.1f}% of filtered revenue).
+- At-Risk Transactions (Decline label OR Satisfaction <= 2): {len(at_risk)} transactions across {at_risk_custs} customer IDs, totaling ${at_risk_rev:,.2f} ({at_risk_rev/total_rev*100:.1f}% of filtered revenue).
 """
     return context_str
 
 
-def render_tab_chatbot(df_filtered: pd.DataFrame):
+def render_tab_chatbot(df_filtered: pd.DataFrame, df_all: pd.DataFrame = None):
     """
     Tab 5: AI Customer Intelligence Chatbot powered by Groq API.
     Reads GROQ_API_KEY from st.secrets without hard-coding.
@@ -1381,7 +1420,7 @@ def render_tab_chatbot(df_filtered: pd.DataFrame):
         ]
 
     # Precompute dataset context for current filter selection
-    dataset_context = build_context(df_filtered)
+    dataset_context = build_context(df_filtered, df_all)
 
     # Expander: "What the chatbot sees" (Item 7)
     with st.expander("🔍 What the chatbot sees (Grounding Context)"):
@@ -1466,7 +1505,9 @@ def render_tab_chatbot(df_filtered: pd.DataFrame):
                                 "4. Always cite specific figures (revenue in $, transaction count n, unique customer count, satisfaction out of 5.0).\n"
                                 "5. Mention small sample sizes when relevant (note that the total dataset has only 100 transactions spanning ~5 weeks from Jan 15 to Feb 20, 2023).\n"
                                 "6. If the provided context does not have enough information to answer the question, explicitly state so rather than hallucinating or speculating.\n"
-                                "7. Format answers cleanly with concise bullet points and bold key numbers."
+                                "7. Format answers cleanly with concise bullet points and bold key numbers.\n"
+                                "8. Segment labels apply to TRANSACTIONS, not to fixed customers. A customer ID can carry different labels on different transactions, so never describe segments as groups of distinct people.\n"
+                                "9. Refer to counts of people as 'customer IDs' (never 'customers'), and note that customer ID counts across segments overlap."
                             )
 
                             full_prompt = f"{dataset_context}\n\nUSER QUESTION: {active_prompt}"
@@ -1522,7 +1563,7 @@ def main():
     st.title("🛍️ NovaRetail Customer Intelligence Dashboard")
     st.markdown(
         f"**Executive Intelligence Dashboard for Sophia Martinez, Director of Customer Intelligence**  \n"
-        f"Showing {df_filtered['CustomerID'].nunique()} of {df['CustomerID'].nunique()} customers | {len(df_filtered)} of {len(df)} transactions"
+        f"Showing {df_filtered['CustomerID'].nunique()} of {df['CustomerID'].nunique()} customer IDs | {len(df_filtered)} of {len(df)} transactions"
     )
     st.markdown("---")
 
@@ -1562,7 +1603,7 @@ def main():
         render_tab_recommendations(df_filtered)
 
     with tab5:
-        render_tab_chatbot(df_filtered)
+        render_tab_chatbot(df_filtered, df)
 
     # 8. Data Notes & Definitions Expander (Item 12)
     st.markdown("<br>", unsafe_allow_html=True)
@@ -1570,8 +1611,8 @@ def main():
         st.markdown(
             """
             ### 1. Risk & Watchlist Definitions
-            - **At-Risk (`AtRisk = True`)**: Customers flagged when assigned to the **Decline** segment OR when reporting **CustomerSatisfaction ≤ 2**. These accounts show acute dissatisfaction or declining engagement.
-            - **Watchlist (Early Warning)**: Transactions from engaged segments (**Promising, Growth, Stable**) with **CustomerSatisfaction ≤ 3** (neutral or low). Designed to detect friction before customers migrate into Decline.
+            - **At-Risk (`AtRisk = True`)**: Transactions flagged when labeled **Decline** OR when reporting **CustomerSatisfaction ≤ 2**. These transactions show acute dissatisfaction or declining engagement.
+            - **Watchlist (Early Warning)**: Transactions from engaged segments (**Promising, Growth, Stable**) with **CustomerSatisfaction ≤ 3** (neutral or low). Designed to detect friction before it shows up as a Decline label.
 
             ### 2. Satisfaction Tiers (`SatisfactionBand`)
             - **Low (1–2)**: Significant customer friction requiring immediate service recovery.
@@ -1596,7 +1637,17 @@ def main():
 
             ### 5. Time Window & Small-Sample Warning
             - **Time Window**: Transactions span **January 15, 2023 to February 20, 2023** (~5 weeks). Trend analyses represent short-term operational cadence, not seasonal or annual cycles.
-            - **Small-Sample Warning**: The dataset comprises 100 total transactions across 34 unique customers. Subsets (e.g., segment × category × region combinations) frequently have sample sizes of $n < 5$. All averages and recommendations should be treated as directional indicators rather than definitive statistical conclusions.
+            - **Small-Sample Warning**: The dataset comprises 100 total transactions across 34 unique customer IDs (see section 6). Subsets (e.g., segment × category × region combinations) frequently have sample sizes of n < 5. All averages and recommendations should be treated as directional indicators rather than definitive statistical conclusions.
+            """
+        )
+        n_ids, n_rows, n_repeat, n_multi = compute_id_facts(df)
+        st.markdown(
+            f"""
+            ### 6. Customer IDs and Segments
+            - The file contains **{n_ids} distinct CustomerIDs** across **{n_rows} transactions**. The project brief mentions about 99 customers, but the data does not contain that many distinct IDs.
+            - **{n_repeat} CustomerIDs** appear in more than one transaction, and **{n_multi}** of them carry **different segment labels on different transactions**.
+            - Therefore the segment label describes a **transaction**, not a fixed customer. A customer ID can appear in more than one segment, so customer ID counts per segment overlap and do not add up to the total.
+            - For this reason the dashboard reports **customer IDs** and **labeled transactions** instead of "customers" and uses transactions as the unit of analysis.
             """
         )
 
